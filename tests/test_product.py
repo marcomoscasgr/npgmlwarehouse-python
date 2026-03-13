@@ -1,3 +1,5 @@
+from time import sleep
+
 from pytest import mark as m
 from sqlalchemy import select
 
@@ -152,3 +154,70 @@ class TestProduct(object):
         prod_coll_items = prod_coll.items()
         for record in records:
             assert (record.id_product, record.irods_root_collection) in prod_coll_items
+
+    @m.context("When inserting a product record in `seq_product_irods_locations`")
+    @m.context("When the unique key is duplicated")
+    @m.context("When the new pipeline name is different")
+    @m.it("Updates the pipeline name")
+    def test_create_upload_irods_location_records_update_pipeline(self, mlwh_session):
+        platform = "Ultimagen"
+        pipeline = "instrument_output"
+        newpipeline = "ultimagen_pipeline"
+        id_product = "244c6fce98d0261f25cedd81dbfcfc08e2207c954c8e25f471f5b6aaca144a32"
+        coll = "/testZone/home/irods/ultimagen/434895-20260110_0323/434895-s1-Z0001-CAGCTCGAATGCGAT"
+        mlwh_session.add(
+            SeqProductIrodsLocations(
+                id_product=id_product,
+                seq_platform_name=platform,
+                pipeline_name=pipeline,
+                irods_root_collection=coll,
+            )
+        )
+        mlwh_session.commit()
+        records = mlwh_session.scalars(select_locations_byplatform(platform)).all()
+        assert len(records) == 1
+
+        create_upload_irods_location_records(
+            mlwh_session, {id_product: coll}, platform, newpipeline
+        )
+
+        records = mlwh_session.scalars(select_locations_byplatform(platform)).all()
+        assert len(records) == 1
+        record = records.pop()
+        assert record.id_product == id_product
+        assert record.irods_root_collection == coll
+        assert record.pipeline_name == newpipeline
+
+    @m.context("When inserting a product record in `seq_product_irods_locations`")
+    @m.context("When the unique key is duplicated")
+    @m.context("When the pipeline name is the same")
+    @m.it("Ignores the row update")
+    def test_create_upload_irods_location_records_duplicate_unique_key_same_pipeline(
+        self, mlwh_session
+    ):
+        platform = "Ultimagen"
+        pipeline = "instrument_output"
+        id_product = "244c6fce98d0261f25cedd81dbfcfc08e2207c954c8e25f471f5b6aaca144a32"
+        coll = "/testZone/home/irods/ultimagen/434895-20260110_0323/434895-s1-Z0001-CAGCTCGAATGCGAT"
+        mlwh_session.add(
+            SeqProductIrodsLocations(
+                id_product=id_product,
+                seq_platform_name=platform,
+                pipeline_name=pipeline,
+                irods_root_collection=coll,
+            )
+        )
+        mlwh_session.commit()
+        records = mlwh_session.scalars(select_locations_byplatform(platform)).all()
+        assert len(records) == 1
+        last_changed = records.pop().last_changed
+
+        sleep(2)
+        create_upload_irods_location_records(
+            mlwh_session, {id_product: coll}, platform, pipeline
+        )
+
+        records = mlwh_session.scalars(select_locations_byplatform(platform)).all()
+        assert len(records) == 1
+        record = records.pop()
+        assert record.last_changed == last_changed

@@ -86,7 +86,10 @@ def create_upload_irods_location_records(
         }
         for id_product, coll in product_collection.items()
     ]
+    insert_query = insert(SeqProductIrodsLocations).values(to_insert)
     session.execute(
-        insert(SeqProductIrodsLocations).values(to_insert).prefix_with("IGNORE")
+        insert_query.on_duplicate_key_update(
+            pipeline_name=insert_query.inserted.pipeline_name,
+        )
     )
     session.commit()

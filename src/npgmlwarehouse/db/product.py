@@ -49,44 +49,85 @@ def get_ultimagen_target_product_records(session: Session, id_run: int):
 
 def create_upload_irods_location_records(
     session: Session,
-    product_collection: dict[str, str],
-    platform_name: str,
+    product_data: dict[dict],
+    seq_platform_name: str,
     pipeline_name: str,
 ):
     """
-    Insert product records into the iRODS location table
-    (`seq_product_irods_locations`) identified by their product IDs.
-    In the case of a duplicate entry in the database which corresponds
-    to a duplicate unique key of (`id_product`,`irods_root_collection`),
-    the insertion is ignored and the function will continue normally
-    with no exception.
+    Insert product records identified by their product IDs into the iRODS location
+    table `seq_product_irods_locations`. In the case of a duplicate entry in the database
+    which corresponds to a duplicate unique key of `id_product` and `irods_root_collection`,
+    the values are updated accordingly and the function will continue normally with no
+    exception. If the duplicate record has equal values, the update for those values is ignored.
+
+    `product_data` should have the following structure.
+
+        product_data[`id_product`] = {
+            "irods_root_collection": "/irods/path/to/collection1",
+            "irods_data_relative_path": "/irods/path/to/data1",
+            "irods_secondary_data_relative_path": "/irods/path/to/secondary/data1",
+        }
+
+    `irods_root_collection` is mandatory because it belongs to the unique key together with
+    the `id_product`.
+    `irods_data_relative_path` and `irods_secondary_data_relative_path` columns are optional.
+
+    All input records (dictionaries) in `product_data` must have the same structure.
+    It means that they must have the same column names specified under `product_data[id_product]`
+    for each `id_product`. This is necessary for a correct bulk upsert operation, otherwise
+    the function will fail.
 
     Args:
         session (Session):
             Database connection Session
-        product_collection (dict[str,str]):
-            Dictionary of (sequencing product ID), (iRODS collection path)
-        platform_name (str):
-            Name of the platform
+        product_data (dict[dict]):
+            Dictionary composed in the following way:
+            key: sequencing product ID (str)
+            value: Dictionary of Column (str), Value (str).
+            Allowed column names:
+                `irods_root_collection`, `irods_data_relative_path`, `irods_secondary_data_relative_path`
+        seq_platform_name (str):
+            Platform name common to all records
         pipeline_name (str):
-            Name of the pipeline
+            Pipeline name common to all records
 
     Returns:
         None
     """
-    if not product_collection:
+    if not product_data:
         return
 
-    to_insert = [
-        {
+    to_insert = []
+    for id_product, data in product_data.items():
+        collection_path = data["irods_root_collection"]
+        relative_data = data.get("irods_data_relative_path", False)
+        secondary_rel_data = data.get("irods_secondary_data_relative_path", False)
+        data_to_insert = {
             "id_product": id_product,
-            "seq_platform_name": platform_name,
+            "seq_platform_name": seq_platform_name,
             "pipeline_name": pipeline_name,
-            "irods_root_collection": coll,
+            "irods_root_collection": collection_path,
         }
-        for id_product, coll in product_collection.items()
-    ]
-    session.execute(
-        insert(SeqProductIrodsLocations).values(to_insert).prefix_with("IGNORE")
-    )
+        if relative_data is not False:
+            data_to_insert["irods_data_relative_path"] = relative_data
+        if secondary_rel_data is not False:
+            data_to_insert["irods_secondary_data_relative_path"] = secondary_rel_data
+        to_insert.append(data_to_insert)
+
+    insert_query = insert(SeqProductIrodsLocations).values(to_insert)
+    on_duplicate_kwargs = {
+        "seq_platform_name": insert_query.inserted.seq_platform_name,
+        "pipeline_name": insert_query.inserted.pipeline_name,
+    }
+    if relative_data is not False:
+        on_duplicate_kwargs["irods_data_relative_path"] = (
+            insert_query.inserted.irods_data_relative_path
+        )
+    if secondary_rel_data is not False:
+        on_duplicate_kwargs["irods_secondary_data_relative_path"] = (
+            insert_query.inserted.irods_secondary_data_relative_path
+        )
+
+    insert_on_duplicate = insert_query.on_duplicate_key_update(**on_duplicate_kwargs)
+    session.execute(insert_on_duplicate)
     session.commit()
